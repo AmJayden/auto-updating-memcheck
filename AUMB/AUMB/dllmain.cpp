@@ -24,7 +24,7 @@ __declspec(naked) std::uintptr_t stub()
         mov edx, esp
         pop edx
 
-        mov ebx, [ebp - 0x10]
+        mov ebx, [ebp - 0x4]
         mov to_spoof, ebx
     }
 
@@ -32,9 +32,9 @@ __declspec(naked) std::uintptr_t stub()
 
     __asm
     {
-        mov ecx, [ebp - 0x48]
-        mov esi, [ebp - 0x18]
-        mov edi, [ebp - 0x24]
+        mov ecx, [ebp - 0x40]
+        mov esi, [ebp - 0x8]
+        mov edi, [ebp - 0x14]
 
         mov eax, to_spoof
         mov[esp], eax
@@ -60,10 +60,10 @@ __declspec(naked) std::uintptr_t stub()
         add DWORD PTR[esp], 0x08
 
         imul eax, eax, 0x344B5409
-        add eax, [ebp - 0x20]
+        add eax, [ebp - 0x10]
         rol eax, 0x11
         imul eax, eax, 0x1594FE2D
-        mov[ebp - 0x20], eax
+        mov[ebp - 0x10], eax
 
         mov eax, [esp]
         mov eax, [eax]
@@ -71,10 +71,10 @@ __declspec(naked) std::uintptr_t stub()
         add ebx, 0x04
         add DWORD PTR[esp], 0x04
         imul eax, eax, 0x1594FE2D
-        add eax, [ebp - 0x1C]
+        add eax, [ebp - 0x0C]
         rol eax, 0x0D
         imul eax, eax, 0xCBB4ABF7
-        mov[ebp - 0x1C], eax
+        mov[ebp - 0x0C], eax
 
         mov eax, [esp]
         mov eax, [eax]
@@ -110,7 +110,7 @@ void main_d()
 
     std::printf("[AUMB] Started!\n\n");
 
-    memcheck_core = utils::pattern_scan("\x8B\xD4\x5A\x8B\x64\x24\x08\x8B\x5D\xF0", "xxxxxxxxxx").back() - 5;
+    memcheck_core = utils::pattern_scan("\x8B\xD4\x5A\x8B\x64\x24\x08\x8B\x5D\xFC", "xxxxxxxxxx").back() - 5;
     hasher_end = memcheck_core + 0x8C;
 
     std::printf("[AUMB] Main Hasher: 0x%X\n", memcheck_core);
@@ -127,10 +127,16 @@ void main_d()
 
     std::vector<std::uintptr_t> silent_checkers;
 
-    for (const auto vec = utils::pattern_scan("\x3B\x00\x73\x00\x2B\x00\x8D\x00\x02", "x?x?x?x?x"); const auto sc : vec)
+    for (const auto vec = utils::pattern_scan("\x3B\x00\x73\x00\x00\x00\x00\x00\x00\x00\x00\x89\x00\x00\xC1", "x?x????????x??x"); const auto sc : vec)
         silent_checkers.push_back(utils::get_prologue(sc));
 
-    for (const auto vec = utils::pattern_scan("\x3B\x00\x0F\x00\x00\x00\x00\x00\x2B\x00\x8D\x00\x02", "x?x?????x?x?x"); const auto sc : vec)
+    for (const auto vec = utils::pattern_scan("\x3B\x00\x73\x00\x00\x00\x00\x00\x00\x00\x00\x4D\x00\x00\xC1", "x?x????????x??x"); const auto sc : vec)
+        silent_checkers.push_back(utils::get_prologue(sc));
+
+    for (const auto vec = utils::pattern_scan("\x3B\x00\x73\x00\x00\x00\x00\x00\x00\x00\x00\xC1\x00\x00\x41", "x?x????????x??x"); const auto sc : vec)
+        silent_checkers.push_back(utils::get_prologue(sc));
+
+    for (const auto vec = utils::pattern_scan("\x3B\x00\x73\x00\x00\x00\x00\x00\x00\x00\x00\x41\x00\x00\x5F", "x?x????????x??x"); const auto sc : vec)
         silent_checkers.push_back(utils::get_prologue(sc));
 
     utils::text_clone = utils::clone_section(utils::text_seg.start_addr);
@@ -159,10 +165,14 @@ void main_d()
 
         const auto size = utils::calculate_function_size(silent_checker);
 
+        bool spoofed = false;
+
         while (ZYAN_SUCCESS(ZydisDecoderDecodeBuffer(&decoder, reinterpret_cast<void*>(silent_checker + offset), size - offset, &instruction)))
         {
             char buffer[256];
             ZydisFormatterFormatInstruction(&formatter, &instruction, buffer, sizeof(buffer), runtime_address);
+
+            static const std::uint8_t special_hasher[] = { 0x50, 0x51, 0x52, 0x56, 0x53, 0xE8, 0x06, 0x00, 0x00, 0x00, 0x5E, 0x5A, 0x59, 0x89, 0xC3, 0x58 };
 
             static const std::map<ZydisRegister, std::array<std::uint8_t, 16>> shellcode_map
             {
@@ -172,20 +182,25 @@ void main_d()
                 { ZYDIS_REGISTER_EDI, { 0x50, 0x51, 0x52, 0x56, 0x57, 0xE8, 0x00, 0x00, 0x00, 0x00, 0x5E, 0x5A, 0x59, 0x8B, 0xF8, 0x58 } },
             };
 
-            if (instruction.mnemonic == ZYDIS_MNEMONIC_MOV && instruction.operands[0].mem.base == ZYDIS_REGISTER_EBP && (instruction.operands[0].mem.disp.value == 0xC || instruction.operands[0].mem.disp.value == 0x8) && offset <= 0x30)
+            if (!spoofed && instruction.mnemonic == ZYDIS_MNEMONIC_MOV && instruction.operands[0].mem.base == ZYDIS_REGISTER_EBP && (instruction.operands[0].mem.disp.value == 0xC || instruction.operands[0].mem.disp.value == 0x8 || instruction.operands[0].mem.disp.value == -0x4) && (offset <= 0x30 && offset >= 0x1E))
             {
                 std::printf("[AUMB] %08X %s\n", runtime_address, buffer);
 
                 std::uint8_t spoof[16]{};
 
-                if (auto it = shellcode_map.find(instruction.operands[1].reg.value); it != shellcode_map.end())
-                    std::memcpy(spoof, it->second.data(), sizeof(it->second));
+                if (silent_checker == silent_checkers.back()) //last hasher is different now lol
+                    std::memcpy(spoof, special_hasher, sizeof(special_hasher));
+                else
+                    if (auto it = shellcode_map.find(instruction.operands[1].reg.value); it != shellcode_map.end())
+                        std::memcpy(spoof, it->second.data(), sizeof(it->second));
 
                 std::memcpy(reinterpret_cast<void*>(spoofed_checker + clone_offset), spoof, sizeof(spoof));
 
                 *reinterpret_cast<std::uintptr_t*>(spoofed_checker + clone_offset + 6) = reinterpret_cast<std::uintptr_t>(utils::spoof) - (spoofed_checker + clone_offset + 6) - 4;
 
                 clone_offset += sizeof(spoof);
+
+                spoofed = true;
             }
 
             for (auto i = 0u; i < instruction.length; ++i)
